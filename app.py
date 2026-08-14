@@ -127,10 +127,105 @@ if uploaded_file:
 
 if st.session_state.search_result:
 
+    result = st.session_state.search_result
+
     st.markdown("---")
+
+    # --------------------------------------------------
+    # AI RESPONSE
+    # --------------------------------------------------
 
     st.markdown("## 🤖 TailorTalk")
 
     st.markdown(
-        st.session_state.search_result["response"]
+        result["response"]
     )
+
+    # --------------------------------------------------
+    # TOP 5 VISUAL MATCHES
+    # --------------------------------------------------
+
+    products = result.get("products", [])
+
+    if products:
+
+        st.markdown("---")
+        st.markdown("## 🛍️ Top 5 Visual Matches")
+
+        cols = st.columns(5)
+
+        for index, product in enumerate(products[:5]):
+
+            with cols[index]:
+
+                # Product image
+                image_url = product.get("image_url")
+
+                if image_url:
+                    st.image(
+                        image_url,
+                        use_container_width=True
+                    )
+
+                # Product name
+                st.markdown(
+                    f"**#{index + 1} {product.get('name', 'Unknown Product')}**"
+                )
+
+                # Similarity
+                score = product.get("score")
+
+                if score is not None:
+                    st.write(
+                        f"🎯 Similarity: **{score:.4f}**"
+                    )
+
+                # Price
+                discounted = product.get(
+                    "discounted_price"
+                )
+
+                retail = product.get(
+                    "retail_price"
+                )
+
+                if discounted is not None:
+                    st.write(
+                        f"💰 ₹{discounted:,.0f}"
+                    )
+
+                    if retail is not None:
+                        st.caption(
+                            f"Retail: ₹{retail:,.0f}"
+                        )
+
+                elif retail is not None:
+                    st.write(
+                        f"💰 ₹{retail:,.0f}"
+                    )
+
+                # Stock
+                stock = product.get("stock")
+
+                if stock is not None:
+
+                    if stock > 0:
+                        st.success(
+                            f"✓ {int(stock)} in stock"
+                        )
+                    else:
+                        st.error(
+                            "✕ Out of stock"
+                        )
+
+                # Website
+                website = product.get(
+                    "website_link"
+                )
+
+                if website:
+                    st.link_button(
+                        "View Product",
+                        website,
+                        use_container_width=True
+                    )
