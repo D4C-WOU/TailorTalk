@@ -5,15 +5,22 @@ from a fashion catalogue.
 
 ## Overview
 
-TailorTalk is an AI agent that accepts a fashion image, converts it into
-a visual embedding, searches a vector database for visually similar
-catalogue products, and presents the closest matches with similarity
-scores and product information.
+TailorTalk is an AI-powered visual fashion search application that
+accepts a fashion image, generates a visual embedding, searches a vector
+database for visually similar catalogue products, and presents the
+closest matches with similarity scores and product information.
 
-The project is designed around the core requirement of the TailorTalk
+The system is designed around the core requirement of the TailorTalk
 assignment: visually similar results should be close in **colour,
 fabric, pattern, border/pallu work, and overall design**, rather than
 simply returning generic sarees.
+
+## Live Demo
+
+**Deployed Application:**\
+https://tailortalk-demo.streamlit.app/
+
+------------------------------------------------------------------------
 
 ## Architecture
 
@@ -24,35 +31,48 @@ User Image
 Streamlit Frontend
     │
     ▼
-TailorTalk Agent (LangChain + Groq)
+TailorTalk Search Pipeline
     │
-    │ function/tool call
     ▼
-search_similar_products(image_path)
+Multi-View Image Processing
+    │
+    ├── Full Image
+    ├── Upper Section
+    └── Lower Section
     │
     ▼
 FashionCLIP
     │
-    │ 512-dimensional normalized embedding
+    │ 512-dimensional normalized embeddings
     ▼
 Qdrant Vector Database
     │
-    │ Top-K similarity search
+    │ Top-20 candidates per view
     ▼
-Product Metadata
+Candidate Combination
+    │
+    ▼
+Weighted Multi-View Reranking
+    │
+    │ Full: 60%
+    │ Upper: 20%
+    │ Lower: 20%
+    ▼
+Final Top-5 Products
     │
     ▼
 Groq LLM
     │
     ▼
 TailorTalk Response
-    │
-    ├── Product name
-    ├── Similarity score
-    ├── Price
-    ├── Stock status
-    └── Product link
 ```
+
+The visual retrieval itself is deterministic: the uploaded image is
+processed using FashionCLIP and searched against Qdrant. The retrieved
+product data is then passed to the Groq LLM, which generates a concise
+natural-language shopping response.
+
+------------------------------------------------------------------------
 
 ## Technology Stack
 
@@ -62,26 +82,29 @@ TailorTalk Response
   Frontend                Streamlit                Web interface and image
                                                    upload
 
-  Agent framework         LangChain                Tool definition and
-                                                   function calling
+  Agent / orchestration   LangChain                Tool definition and LLM
+                                                   integration
 
-  LLM                     Groq                     Agent reasoning and
-                          (`openai/gpt-oss-20b`)   response generation
+  LLM                     Groq                     Natural-language
+                          (`openai/gpt-oss-20b`)   shopping responses
 
   Vision model            FashionCLIP              Fashion-specific image
                                                    embeddings
 
-  Vector database         Qdrant                   Fast similarity search
-                                                   over embeddings
+  Vector database         Qdrant                   Similarity search over
+                                                   product embeddings
 
-  Image processing        Pillow                   Image loading and RGB
-                                                   conversion
+  Image processing        Pillow                   Image loading,
+                                                   conversion and cropping
 
   ML runtime              PyTorch                  FashionCLIP inference
 
-  Environment management  python-dotenv            API key/configuration
+  Environment management  python-dotenv            API key and
+                                                   configuration
                                                    management
   ------------------------------------------------------------------------
+
+------------------------------------------------------------------------
 
 ## How the Search Works
 
@@ -90,92 +113,210 @@ TailorTalk Response
 The provided saree image catalogue is processed and indexed before
 running the application.
 
-Each catalogue image is passed through FashionCLIP to create a visual
-embedding.
+Each catalogue image is passed through FashionCLIP to generate a visual
+embedding, which is stored in Qdrant together with the relevant product
+metadata.
 
-### 2. Embedding generation
+### 2. Query image processing
 
-FashionCLIP produces a **512-dimensional** image representation.
+When a user uploads an image, TailorTalk creates three visual views:
 
-The embedding is L2-normalized before being stored/searched, allowing
-similarity to be compared consistently.
+-   **Full image**
+-   **Upper section** --- top 60% of the image
+-   **Lower section** --- bottom 60% of the image
 
-### 3. Vector search
+The upper and lower regions overlap slightly so that important visual
+details around the middle of the garment are not completely excluded.
 
-The uploaded query image follows the same embedding pipeline.
+### 3. Embedding generation
 
-The resulting vector is sent to Qdrant, which returns the closest
-catalogue vectors using similarity search.
+Each image view is passed through FashionCLIP.
 
-TailorTalk currently retrieves the **top 5** matches.
+The resulting image representation is L2-normalized before being used
+for similarity search, allowing the embeddings to be compared
+consistently.
 
-### 4. Agent tool
+### 4. Vector search
 
-The search logic is exposed to LangChain as:
+Each visual view is independently searched against the Qdrant catalogue.
+
+TailorTalk retrieves up to **20 candidates per view** rather than
+immediately returning only the first five results.
+
+### 5. Candidate combination and reranking
+
+Products returned from multiple views are combined using their SKU as
+the preferred stable identifier, with the Qdrant point ID used as a
+fallback.
+
+A weighted similarity score is then calculated:
+
+``` text
+Final Score =
+    Full Image Score × 0.60
+  + Upper Section Score × 0.20
+  + Lower Section Score × 0.20
+```
+
+If a product is not returned by one of the views, the available scores
+are normalized using the weights that were actually present.
+
+The candidates are then sorted by the final score and the **top 5
+products** are returned.
+
+### 6. LLM response generation
+
+The retrieved product information is passed to the Groq LLM.
+
+The LLM generates a concise response using only the retrieved catalogue
+data, including information such as:
+
+-   Product name
+-   Similarity score
+-   Price
+-   Stock availability
+-   Product link
+
+The LLM is instructed not to invent products, prices, stock information,
+scores or URLs.
+
+------------------------------------------------------------------------
+
+## Result Quality Improvements
+
+Search quality is the most important part of this project because the
+catalogue contains products from the same broad garment category. A
+simple nearest-neighbour search over the complete image may therefore
+return products that are generally similar but miss important
+fine-grained details.
+
+Several techniques were implemented to improve retrieval quality.
+
+### 1. Fashion-specific embeddings
+
+Instead of using a generic image embedding model, TailorTalk uses
+**FashionCLIP**, which is designed for fashion-related visual
+representations.
+
+This helps the system capture clothing-specific characteristics such as:
+
+-   Colour
+-   Pattern
+-   Fabric appearance
+-   Garment structure
+-   Overall visual style
+
+### 2. Multi-view retrieval
+
+A single embedding of the complete image may not sufficiently emphasize
+fine-grained saree details.
+
+To address this, the query image is searched using three different
+views:
+
+``` text
+                Query Image
+                     │
+          ┌──────────┼──────────┐
+          ▼          ▼          ▼
+        Full       Upper       Lower
+          │          │           │
+          ▼          ▼           ▼
+       FashionCLIP / FashionCLIP / FashionCLIP
+          │          │           │
+          ▼          ▼           ▼
+       Qdrant     Qdrant      Qdrant
+```
+
+The different views help the system pay attention to both the overall
+design and localized details such as blouse/shoulder design, borders,
+pallu and patterns.
+
+### 3. Candidate expansion
+
+Instead of searching for only five products, TailorTalk retrieves up to
+**20 candidates for each visual view**.
+
+This creates a larger candidate pool before the final ranking stage.
+
+### 4. Weighted reranking
+
+The candidates from all views are combined and reranked using weighted
+similarity scores:
+
+-   **Full image:** 60%
+-   **Upper section:** 20%
+-   **Lower section:** 20%
+
+The full image receives the highest weight because it captures the
+overall appearance of the saree, while the upper and lower sections
+provide additional fine-grained visual information.
+
+This approach allows a product that is consistently similar across
+multiple views to rank highly rather than relying on a single visual
+crop.
+
+### 5. Result inspection and testing
+
+The retrieval pipeline was tested with multiple saree images and the
+returned products were visually inspected for similarity in:
+
+-   Colour combinations
+-   Overall silhouette
+-   Fabric appearance
+-   Print and pattern
+-   Border design
+-   Pallu design
+-   Overall styling
+
+The goal was to prioritize meaningful visual similarity rather than
+simply returning products belonging to the same broad category.
+
+------------------------------------------------------------------------
+
+## Agent / Tool Design
+
+The search operation is isolated behind a callable LangChain tool:
 
 ``` python
 search_similar_products(image_path: str) -> list
 ```
 
-The tool returns structured product information including:
-
--   similarity score
--   product name
--   SKU
--   stock
--   retail price
--   discounted price
--   image URL
--   website URL
-
-The LLM decides when the visual search tool should be called and then
-turns the tool output into a concise user-facing recommendation.
-
-## Search Quality
-
-Search quality is the most important part of this project because the
-catalogue contains the same broad garment category. Generic visual
-similarity is therefore not enough.
-
-The implementation uses **FashionCLIP** rather than a generic image
-embedding model because the task is specifically fashion-oriented.
-
-The retrieval pipeline was repeatedly tested with different saree
-images. The returned matches were visually inspected for similarity in:
-
--   colour combinations
--   overall silhouette
--   fabric appearance
--   print/pattern
--   border design
--   pallu design
--   overall styling
-
-The application returns five candidates so users can compare several
-close alternatives rather than relying on a single result.
-
-## Agent / Tool Design
-
-The search operation is isolated behind a callable LangChain tool.
-
-This keeps the responsibilities separated:
+The responsibilities are separated as follows:
 
 ``` text
-LLM
- └── decides whether visual search is required
-
-Tool
- └── performs deterministic image → embedding → Qdrant search
-
+Uploaded Image
+      │
+      ▼
+Application
+      │
+      ▼
+LangChain Search Tool
+      │
+      ▼
+FashionCLIP
+      │
+      ▼
 Qdrant
- └── retrieves nearest catalogue products
-
-LLM
- └── explains/recommends the returned products
+      │
+      ▼
+Top-5 Product Results
+      │
+      ▼
+Groq LLM
+      │
+      ▼
+Natural-Language Response
 ```
 
-This also prevents the LLM from inventing catalogue results because
-product retrieval is performed by the vector-search tool.
+The visual search tool performs the actual product retrieval. The LLM is
+used after retrieval to explain and recommend the returned products.
+
+This separation prevents the LLM from generating or inventing catalogue
+results because product information comes directly from the
+vector-search pipeline.
+
+------------------------------------------------------------------------
 
 ## Project Structure
 
@@ -183,21 +324,35 @@ product retrieval is performed by the vector-search tool.
 TailorTalk/
 │
 ├── app.py                  # Streamlit application
-├── agent.py                # LangChain/Groq agent and tool orchestration
-├── search_tool.py          # FashionCLIP + Qdrant search tool
-├── test_tool.py            # Tool-level testing
-├── search.py               # Direct vector-search testing
+├── agent.py                # Groq LLM integration and response generation
+├── search_tool.py          # FashionCLIP + Qdrant visual search
+├── create_collection.py    # Qdrant collection creation
+├── index_products.py       # Catalogue embedding and indexing
+├── find_query.py            # Query/search testing
+├── search.py                # Direct vector-search testing
+├── test_tool.py             # LangChain tool testing
+├── test_embedding.py        # Embedding testing
+├── test_images.py           # Image testing
+├── test_qdrant.py           # Qdrant connectivity/testing
+├── test_similarity.py       # Similarity testing
+├── verify_index.py          # Index verification
+├── inspect_dataset.py       # Dataset inspection
+├── reset_collection.py      # Qdrant collection reset utility
+│
 ├── data/
-│   └── images/             # Local query/test images
-├── .env                    # Local secrets (DO NOT COMMIT)
+│   └── images/              # Local query/test images
+│
+├── .env                     # Local secrets (DO NOT COMMIT)
 ├── .gitignore
 ├── requirements.txt
 └── README.md
 ```
 
+------------------------------------------------------------------------
+
 ## Environment Variables
 
-Create a `.env` file:
+Create a `.env` file locally:
 
 ``` env
 QDRANT_URL=your_qdrant_url
@@ -207,12 +362,17 @@ GROQ_API_KEY=your_groq_api_key
 
 Never commit `.env` or expose API keys publicly.
 
+For deployment, configure these values using the deployment platform's
+secrets/environment-variable system.
+
+------------------------------------------------------------------------
+
 ## Local Setup
 
 ### 1. Clone the repository
 
 ``` bash
-git clone <YOUR_GITHUB_REPOSITORY_URL>
+git clone https://github.com/D4C-WOU/TailorTalk.git
 cd TailorTalk
 ```
 
@@ -233,9 +393,15 @@ pip install -r requirements.txt
 
 ### 4. Configure environment variables
 
-Create `.env` using the variables shown above.
+Create a `.env` file using:
 
-### 5. Run the Streamlit application
+``` env
+QDRANT_URL=your_qdrant_url
+QDRANT_API_KEY=your_qdrant_api_key
+GROQ_API_KEY=your_groq_api_key
+```
+
+### 5. Run the application
 
 ``` bash
 python -m streamlit run app.py
@@ -246,6 +412,8 @@ The application will be available at:
 ``` text
 http://localhost:8501
 ```
+
+------------------------------------------------------------------------
 
 ## Testing
 
@@ -267,6 +435,12 @@ python test_tool.py
 python agent.py
 ```
 
+Additional testing utilities are included in the repository for checking
+embeddings, image processing, Qdrant connectivity, similarity results
+and index integrity.
+
+------------------------------------------------------------------------
+
 ## Assumptions
 
 -   The catalogue consists primarily of sarees, so the search task is
@@ -274,93 +448,173 @@ python agent.py
 -   The input image is expected to contain a reasonably clear view of
     the clothing item.
 -   Visual similarity is based on the image representation learned by
-    FashionCLIP; it does not guarantee exact product identity.
+    FashionCLIP and does not guarantee exact product identity.
+-   Similarity scores represent visual embedding similarity and should
+    not be interpreted as a human-verified percentage match.
 -   Product stock and pricing are taken from the indexed catalogue
     metadata and may change on the source website.
+-   The system assumes that the indexed catalogue contains sufficiently
+    relevant visual examples for meaningful retrieval.
+
+------------------------------------------------------------------------
 
 ## Trade-offs
 
 ### FashionCLIP
 
-**Advantage:** Fashion-specific embeddings are better suited to clothing
-similarity than generic image embeddings.
+**Advantage:**\
+Fashion-specific embeddings are better suited to clothing similarity
+than generic image embeddings.
 
-**Trade-off:** The model adds a relatively heavy local inference
-dependency and increases application startup time.
+**Trade-off:**\
+The model adds a relatively heavy inference dependency and increases
+application startup time and resource requirements.
+
+### Multi-view retrieval
+
+**Advantage:**\
+Searching multiple regions of the image can capture details that may be
+underrepresented in a single full-image embedding.
+
+**Trade-off:**\
+Each query requires multiple embedding generations and vector searches,
+increasing inference and retrieval time compared with a single-view
+search.
+
+### Candidate expansion and reranking
+
+**Advantage:**\
+Retrieving 20 candidates per view before reranking provides a larger
+candidate pool and allows products to be evaluated across multiple
+visual views.
+
+**Trade-off:**\
+The additional retrieval and ranking steps increase query latency.
 
 ### Qdrant
 
-**Advantage:** Provides a dedicated vector-search layer and scales
-better than performing a full in-memory comparison for every query.
+**Advantage:**\
+Qdrant provides a dedicated vector-search layer and is more appropriate
+for scalable similarity retrieval than performing a full in-memory
+comparison for every query.
 
-**Trade-off:** The application depends on an external vector database
-service and therefore requires Qdrant configuration.
+**Trade-off:**\
+The application depends on an external vector database service and
+therefore requires Qdrant configuration and network access.
 
 ### Groq + LangChain
 
-**Advantage:** Keeps the agent/tool-calling layer simple while providing
-natural-language responses.
+**Advantage:**\
+The combination provides a simple way to integrate an LLM response layer
+with a structured search tool.
 
-**Trade-off:** An external LLM API is required for the agent response
-layer.
+**Trade-off:**\
+An external LLM API is required for natural-language responses.
 
 ### Top-5 retrieval
 
-Returning five candidates gives users alternatives and makes the search
-easier to evaluate.
+**Advantage:**\
+Returning five candidates gives users multiple alternatives to compare
+instead of relying on a single result.
 
-The trade-off is that lower-ranked results may be less visually similar
-than the top result.
+**Trade-off:**\
+Lower-ranked results may be less visually similar than the top-ranked
+result.
+
+------------------------------------------------------------------------
 
 ## Current Features
 
 -   ✅ Fashion image upload
 -   ✅ FashionCLIP image embeddings
+-   ✅ Multi-view visual retrieval
 -   ✅ Qdrant vector search
+-   ✅ Candidate expansion and weighted reranking
 -   ✅ Top-5 visual similarity retrieval
 -   ✅ LangChain callable search tool
--   ✅ Groq function/tool calling
+-   ✅ Groq LLM response generation
 -   ✅ Similarity scores
 -   ✅ Price and discount information
 -   ✅ Stock availability
 -   ✅ Product website links
 -   ✅ Product images in the Streamlit results UI
--   ✅ Repeated testing with multiple saree images
+-   ✅ Product-focused conversational follow-up
+-   ✅ Testing with multiple saree images
+-   ✅ Deployed Streamlit application
+
+------------------------------------------------------------------------
 
 ## Deployment
 
-The final application is intended to be deployed on a platform such as:
+TailorTalk is deployed using **Streamlit Community Cloud**.
 
--   Streamlit Community Cloud
--   Hugging Face Spaces
--   Render
+The deployed application is available at:
 
-Deployment must provide a public application URL and configure the
-required environment variables as platform secrets.
+``` text
+https://tailortalk-demo.streamlit.app/
+```
+
+The deployment requires the following secrets to be configured:
+
+``` text
+QDRANT_URL
+QDRANT_API_KEY
+GROQ_API_KEY
+```
+
+The local `.env` file is not committed to the repository.
+
+------------------------------------------------------------------------
 
 ## Assignment Alignment
 
-TailorTalk implements the assignment's core pipeline:
+TailorTalk implements the assignment's core visual-search pipeline:
 
 ``` text
-Image
-  ↓
-FashionCLIP embedding
-  ↓
-Qdrant vector index
-  ↓
-LangChain callable tool
-  ↓
-Groq agent
-  ↓
-Streamlit interface
-  ↓
-Top visually similar catalogue products
+Fashion Image
+      ↓
+Multi-View Image Processing
+      ↓
+FashionCLIP Embeddings
+      ↓
+Qdrant Vector Search
+      ↓
+Candidate Combination
+      ↓
+Weighted Reranking
+      ↓
+Top-5 Similar Products
+      ↓
+Groq LLM
+      ↓
+Streamlit Interface
 ```
 
-The final submission should include:
+The implementation specifically focuses on improving visual similarity
+rather than relying on generic category matching.
 
-1.  A working deployed application URL
-2.  The GitHub repository URL
-3.  This README with setup instructions, architecture, quality
-    improvements, assumptions, and trade-offs
+### Final Submission
+
+The project provides:
+
+1.  A working deployed application
+2.  A GitHub repository containing the source code
+3.  Setup instructions
+4.  Architecture and technology choices
+5.  Visual retrieval quality improvements
+6.  Assumptions and trade-offs
+7.  Testing utilities and documentation
+
+------------------------------------------------------------------------
+
+## Conclusion
+
+TailorTalk combines a fashion-specific vision model, vector similarity
+search, multi-view retrieval, weighted reranking and an LLM-powered
+shopping interface to provide visually similar saree recommendations
+from a catalogue.
+
+The main focus of the implementation is not simply retrieving products
+from the same category, but improving the relevance of the returned
+products by considering both **global appearance and localized visual
+details**.
