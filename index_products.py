@@ -5,6 +5,7 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 from dotenv import load_dotenv
+import streamlit as st 
 
 from transformers import CLIPProcessor, CLIPModel
 
@@ -39,14 +40,22 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 # CONNECT TO QDRANT
 # --------------------------------------------------
 
-print("Connecting to Qdrant...")
+@st.cache_resource
+def create_qdrant_client():
 
-client = QdrantClient(
-    url=QDRANT_URL,
-    api_key=QDRANT_API_KEY
-)
+    print("Connecting to Qdrant...")
 
-print("Connected!")
+    client = QdrantClient(
+        url=QDRANT_URL,
+        api_key=QDRANT_API_KEY
+    )
+
+    print("Connected to Qdrant!")
+
+    return client
+
+
+client = create_qdrant_client()
 
 
 # --------------------------------------------------
@@ -82,14 +91,27 @@ print("Website column:", website_column)
 # LOAD FASHIONCLIP
 # --------------------------------------------------
 
-print("\nLoading FashionCLIP...")
+@st.cache_resource
+def load_fashion_clip():
 
-model = CLIPModel.from_pretrained(MODEL_NAME)
-processor = CLIPProcessor.from_pretrained(MODEL_NAME)
+    print("Loading FashionCLIP...")
 
-model.eval()
+    model = CLIPModel.from_pretrained(
+        MODEL_NAME
+    )
 
-print("FashionCLIP loaded!")
+    processor = CLIPProcessor.from_pretrained(
+        MODEL_NAME
+    )
+
+    model.eval()
+
+    print("FashionCLIP loaded!")
+
+    return model, processor
+
+
+model, processor = load_fashion_clip()
 
 
 # --------------------------------------------------
