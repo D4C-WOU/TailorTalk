@@ -2,9 +2,10 @@ import os
 
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 
 from search_tool import search_similar_products
+
 
 # --------------------------------------------------
 # ENVIRONMENT
@@ -29,126 +30,95 @@ llm = ChatGroq(
 
 
 # --------------------------------------------------
-# TOOLS
-# --------------------------------------------------
-
-tools = [
-    search_similar_products
-]
-
-llm_with_tools = llm.bind_tools(tools)
-
-
-# --------------------------------------------------
 # SYSTEM PROMPT
 # --------------------------------------------------
 
 SYSTEM_PROMPT = """
 You are TailorTalk, an AI fashion shopping assistant.
 
-Your job is to help users discover visually similar
-fashion products from the TailorTalk catalogue.
+You help users discover visually similar fashion
+products from the TailorTalk catalogue.
 
-When the user provides an image and asks for similar
-products, use the search_similar_products tool.
+The visual search itself is performed by the
+search_similar_products tool using FashionCLIP
+embeddings and Qdrant.
 
-The tool accepts an image_path and searches the product
-catalogue using FashionCLIP embeddings and Qdrant.
-
-After receiving search results:
+When given search results:
 
 - Recommend the most relevant products.
-- Mention similarity scores.
+- Mention similarity scores when useful.
 - Mention prices.
 - Mention stock availability.
-- Include the product website when available.
-- Keep the response concise and useful.
-
-Never claim that you searched the catalogue unless
-the search tool was actually executed.
+- Include product website links when available.
+- Keep responses concise and useful.
+- Never invent products, prices, stock, scores or links.
 """
 
 
 # --------------------------------------------------
-# AGENT FUNCTION
+# SEARCH FUNCTION
 # --------------------------------------------------
 
 def search_products(image_path):
 
-    messages = [
-        (
-            "system",
-            SYSTEM_PROMPT
-        ),
-        (
-            "human",
-            f"""
-            Find fashion products visually similar to this image:
+    # --------------------------------------------------
+    # STEP 1: DIRECTLY EXECUTE VISUAL SEARCH
+    # --------------------------------------------------
 
-            {image_path}
-            """
+    tool_result = search_similar_products.invoke(
+        {
+            "image_path": image_path
+        }
+    )
+
+    # --------------------------------------------------
+    # STEP 2: ASK LLM TO FORMAT THE RESULTS
+    # --------------------------------------------------
+
+    messages = [
+        SystemMessage(
+            content=SYSTEM_PROMPT
+        ),
+        HumanMessage(
+            content=f"""
+A user uploaded a fashion image and wants visually
+similar products.
+
+Here are the results returned by the visual search
+system:
+
+{tool_result}
+
+Create a concise shopping response for the user.
+
+Do not perform another search.
+Do not invent information.
+"""
         )
     ]
 
-    # --------------------------------------------------
-    # STEP 1: ASK LLM
-    # --------------------------------------------------
-
-    response = llm_with_tools.invoke(messages)
-
-    print("\nLLM tool call:")
-
-    if not response.tool_calls:
-        print("No tool call generated.")
-        return
-
-    # --------------------------------------------------
-    # STEP 2: EXECUTE TOOL
-    # --------------------------------------------------
-
-    tool_call = response.tool_calls[0]
-
-    print("Tool:", tool_call["name"])
-    print("Arguments:", tool_call["args"])
-
-    tool_result = search_similar_products.invoke(
-        tool_call["args"]
-    )
-
-    print("\nTool executed successfully.")
-
-    # --------------------------------------------------
-    # STEP 3: ADD AI MESSAGE + TOOL RESULT
-    # --------------------------------------------------
-
-    messages.append(response)
-
-    messages.append(
-        ToolMessage(
-            content=str(tool_result),
-            tool_call_id=tool_call["id"]
-        )
-    )
-
-    # --------------------------------------------------
-    # STEP 4: FINAL LLM RESPONSE
-    # --------------------------------------------------
-
     final_response = llm.invoke(messages)
 
-    print("\n" + "=" * 60)
-    print("TAILORTALK RESPONSE")
-    print("=" * 60)
+    return {
+        "response": final_response.content,
+        "products": tool_result
+    }
 
-    print(final_response.content)
+
 # --------------------------------------------------
-# TEST
+# CLI TEST
 # --------------------------------------------------
 
 if __name__ == "__main__":
 
     print("Starting TailorTalk agent...\n")
 
-    search_products(
+    result = search_products(
         "data/images/000691.jpg"
     )
+
+    print("\n" + "=" * 60)
+    print("TAILORTALK RESPONSE")
+    print("=" * 60)
+
+    print(result["response"])
