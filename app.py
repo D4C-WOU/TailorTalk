@@ -3,7 +3,7 @@ import tempfile
 
 import streamlit as st
 
-from agent import search_products
+from agent import search_products, chat_about_products
 
 
 # --------------------------------------------------
@@ -23,6 +23,9 @@ st.set_page_config(
 
 if "search_result" not in st.session_state:
     st.session_state.search_result = None
+
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
 
 # --------------------------------------------------
@@ -99,8 +102,11 @@ if uploaded_file:
                     image_path
                 )
 
-            # Store result instead of immediately rendering it
+            # Store search result
             st.session_state.search_result = result
+
+            # Reset chat for new image
+            st.session_state.chat_history = []
 
         except Exception as e:
 
@@ -121,19 +127,24 @@ if uploaded_file:
                     pass
 
 
-# --------------------------------------------------
-# DISPLAY RESULT
-# --------------------------------------------------
+# ==================================================
+# DISPLAY RESULTS
+# ==================================================
 
 if st.session_state.search_result:
 
     result = st.session_state.search_result
 
-    st.markdown("---")
+    products = result.get(
+        "products",
+        []
+    )
 
     # --------------------------------------------------
     # AI RESPONSE
     # --------------------------------------------------
+
+    st.markdown("---")
 
     st.markdown("## 🤖 TailorTalk")
 
@@ -141,46 +152,70 @@ if st.session_state.search_result:
         result["response"]
     )
 
-    # --------------------------------------------------
-    # TOP 5 VISUAL MATCHES
-    # --------------------------------------------------
 
-    products = result.get("products", [])
+    # ==================================================
+    # TOP 5 PRODUCTS
+    # ==================================================
 
     if products:
 
         st.markdown("---")
-        st.markdown("## 🛍️ Top 5 Visual Matches")
+
+        st.markdown(
+            "## 🛍️ Top 5 Visual Matches"
+        )
 
         cols = st.columns(5)
 
-        for index, product in enumerate(products[:5]):
+        for index, product in enumerate(
+            products[:5]
+        ):
 
             with cols[index]:
 
-                # Product image
-                image_url = product.get("image_url")
+                # --------------------------------------------------
+                # PRODUCT IMAGE
+                # --------------------------------------------------
+
+                image_url = product.get(
+                    "image_url"
+                )
 
                 if image_url:
+
                     st.image(
                         image_url,
                         use_container_width=True
                     )
 
-                # Product name
+                # --------------------------------------------------
+                # PRODUCT NAME
+                # --------------------------------------------------
+
                 st.markdown(
-                    f"**#{index + 1} {product.get('name', 'Unknown Product')}**"
+                    f"**#{index + 1} "
+                    f"{product.get('name', 'Unknown Product')}**"
                 )
 
-                # Similarity
-                score = product.get("score")
+                # --------------------------------------------------
+                # SIMILARITY
+                # --------------------------------------------------
+
+                score = product.get(
+                    "score"
+                )
 
                 if score is not None:
+
                     st.write(
-                        f"🎯 Similarity: **{score:.4f}**"
+                        f"🎯 Similarity: "
+                        f"**{score:.4f}**"
                     )
 
-                # Price
+                # --------------------------------------------------
+                # PRICE
+                # --------------------------------------------------
+
                 discounted = product.get(
                     "discounted_price"
                 )
@@ -190,42 +225,165 @@ if st.session_state.search_result:
                 )
 
                 if discounted is not None:
+
                     st.write(
-                        f"💰 ₹{discounted:,.0f}"
+                        f"💰 **₹{discounted:,.0f}**"
                     )
 
-                    if retail is not None:
+                    if (
+                        retail is not None
+                        and retail != discounted
+                    ):
+
                         st.caption(
-                            f"Retail: ₹{retail:,.0f}"
+                            f"Retail: "
+                            f"₹{retail:,.0f}"
                         )
 
                 elif retail is not None:
+
                     st.write(
-                        f"💰 ₹{retail:,.0f}"
+                        f"💰 **₹{retail:,.0f}**"
                     )
 
-                # Stock
-                stock = product.get("stock")
+                # --------------------------------------------------
+                # STOCK
+                # --------------------------------------------------
 
-                if stock is not None:
+                stock = product.get(
+                    "stock",
+                    0
+                )
 
-                    if stock > 0:
-                        st.success(
-                            f"✓ {int(stock)} in stock"
-                        )
-                    else:
-                        st.error(
-                            "✕ Out of stock"
-                        )
+                stock = max(
+                    0,
+                    int(stock or 0)
+                )
 
-                # Website
+                if stock > 0:
+
+                    st.success(
+                        f"✓ {stock} in stock"
+                    )
+
+                else:
+
+                    st.error(
+                        "✕ Out of stock"
+                    )
+
+                # --------------------------------------------------
+                # PRODUCT URL
+                # --------------------------------------------------
+
                 website = product.get(
                     "website_link"
                 )
 
                 if website:
+
                     st.link_button(
-                        "View Product",
+                        "View Product ↗",
                         website,
                         use_container_width=True
                     )
+
+
+    # ==================================================
+    # CHAT UI
+    # ==================================================
+
+    st.markdown("---")
+
+    st.markdown(
+        "## 💬 Ask TailorTalk"
+    )
+
+    st.caption(
+        "Ask anything about the products above."
+    )
+
+
+    # --------------------------------------------------
+    # DISPLAY CHAT HISTORY
+    # --------------------------------------------------
+
+    for message in st.session_state.chat_history:
+
+        with st.chat_message(
+            message["role"]
+        ):
+
+            st.markdown(
+                message["content"]
+            )
+
+
+    # --------------------------------------------------
+    # CHAT INPUT
+    # --------------------------------------------------
+
+    user_question = st.chat_input(
+        "e.g. Which one is the cheapest?"
+    )
+
+
+    if user_question:
+
+        # --------------------------------------------------
+        # USER MESSAGE
+        # --------------------------------------------------
+
+        st.session_state.chat_history.append(
+            {
+                "role": "user",
+                "content": user_question
+            }
+        )
+
+        with st.chat_message("user"):
+
+            st.markdown(
+                user_question
+            )
+
+
+        # --------------------------------------------------
+        # AI RESPONSE
+        # --------------------------------------------------
+
+        with st.chat_message("assistant"):
+
+            with st.spinner(
+                "Thinking..."
+            ):
+
+                try:
+
+                    response = chat_about_products(
+                        user_question,
+                        products,
+                        st.session_state.chat_history
+                    )
+
+                except Exception as e:
+
+                    response = (
+                        f"Sorry, something went wrong: {e}"
+                    )
+
+            st.markdown(
+                response
+            )
+
+
+        # --------------------------------------------------
+        # SAVE AI RESPONSE
+        # --------------------------------------------------
+
+        st.session_state.chat_history.append(
+            {
+                "role": "assistant",
+                "content": response
+            }
+        )
